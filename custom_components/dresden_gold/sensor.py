@@ -2,6 +2,7 @@ from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
+import json
 from .const import DOMAIN, WEIGHT_CODES, WEIGHT_DISPLAY
 from .coordinator import DresdenGoldCoordinator
 
@@ -53,7 +54,7 @@ class DresdenGoldCoinsSensor(DresdenGoldBaseSensor):
             "coins_json": json.dumps(coins),
             "last_update": self.coordinator.last_update_success_time.isoformat() if self.coordinator.last_update_success_time else None,
         }
-        for i, coin in enumerate(coins[:self.coordinator.max_coins], 1):
+        for i, coin in enumerate(coins, 1):
             attrs[f"coin_{i}_name"] = coin["name"]
             attrs[f"coin_{i}_price"] = coin["price"]
             attrs[f"coin_{i}_weight"] = coin["weight"]

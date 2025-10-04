@@ -1,6 +1,7 @@
 import voluptuous as vol
 from typing import Any
 from homeassistant import config_entries
+from homeassistant.helpers import selector
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from .const import (
@@ -46,19 +47,31 @@ class DresdenGoldConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(
                     CONF_MIN_PRICE,
                     default=defaults.get(CONF_MIN_PRICE, DEFAULT_MIN_PRICE),
-                ): float,
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=1000, step=0.1, mode=selector.NumberSelectorMode.BOX
+                    )
+                ),
                 vol.Required(
                     CONF_MAX_PRICE,
                     default=defaults.get(CONF_MAX_PRICE, DEFAULT_MAX_PRICE),
-                ): float,
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=1000, step=0.1, mode=selector.NumberSelectorMode.BOX
+                    )
+                ),
                 vol.Required(
                     CONF_MAX_COINS,
                     default=defaults.get(CONF_MAX_COINS, DEFAULT_MAX_COINS),
-                ): int,
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=5, max=50, step=1, mode=selector.NumberSelectorMode.BOX
+                    )
+                ),
                 vol.Required(
                     CONF_REQUIRE_ZERO_TAX,
                     default=defaults.get(CONF_REQUIRE_ZERO_TAX, DEFAULT_REQUIRE_ZERO_TAX),
-                ): bool,
+                ): selector.BooleanSelector(),
             }
         )
 

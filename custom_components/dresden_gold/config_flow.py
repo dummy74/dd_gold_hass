@@ -38,7 +38,8 @@ class DresdenGoldConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Create the options flow."""
         return DresdenGoldOptionsFlow(config_entry)
 
-    def _get_data_schema(self, defaults: dict | None = None) -> vol.Schema:
+    @staticmethod
+    def _get_data_schema(defaults: dict | None = None) -> vol.Schema:
         defaults = defaults or {}
         return vol.Schema(
             {
@@ -77,5 +78,5 @@ class DresdenGoldOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=self.flow_handler._get_data_schema(self.config_entry.data)  # Assuming flow_handler is the ConfigFlow instance, adjust if needed
+            data_schema=DresdenGoldConfigFlow._get_data_schema(self.config_entry.data)
         )

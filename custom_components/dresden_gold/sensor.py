@@ -2,7 +2,6 @@ from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
-import json
 from .const import DOMAIN, WEIGHT_CODES, WEIGHT_DISPLAY
 from .coordinator import DresdenGoldCoordinator
 

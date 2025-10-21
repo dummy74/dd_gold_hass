@@ -1,4 +1,4 @@
-DOMAIN = "dresden_gold"
+DOMAIN = "dd_gold"
 
 CONF_MIN_PRICE = "min_price"
 CONF_MAX_PRICE = "max_price"

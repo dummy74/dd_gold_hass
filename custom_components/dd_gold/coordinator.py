@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urlunparse
 from collections import defaultdict
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.core import HomeAssistant
-from .const import DOMAIN, WEIGHT_CODES, WEIGHT_DISPLAY, CONF_MIN_PRICE, CONF_MAX_PRICE, CONF_MAX_COINS, CONF_REQUIRE_ZERO_TAX, DEFAULT_UPDATE_INTERVAL
+from .const import DOMAIN, WEIGHT_CODES, WEIGHT_DISPLAY, CONF_MIN_PRICE, CONF_MAX_PRICE, CONF_MAX_COINS, CONF_REQUIRE_ZERO_TAX, DEFAULT_UPDATE_INTERVAL, DEFAULT_MIN_PRICE, DEFAULT_MAX_PRICE, DEFAULT_REQUIRE_ZERO_TAX, DEFAULT_MAX_COINS
 
 _LOGGER = logging.getLogger(__name__)
 

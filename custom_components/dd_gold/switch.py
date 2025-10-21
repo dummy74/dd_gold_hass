@@ -1,4 +1,5 @@
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
@@ -15,12 +16,12 @@ async def async_setup_entry(
     ]
     async_add_entities(entities)
 
-class DresdenGoldZeroTaxSwitch(SwitchEntity):
+class DresdenGoldZeroTaxSwitch(CoordinatorEntity, SwitchEntity):
     """Switch for require zero tax."""
 
     def __init__(self, coordinator: DresdenGoldCoordinator) -> None:
         """Initialize the switch."""
-        self.coordinator = coordinator
+        super().__init__(coordinator)
         self._attr_name = "Dresden Gold Require Zero Tax"
         self._attr_unique_id = "dresden_gold_require_zero_tax"
         self._attr_icon = "mdi:percent"

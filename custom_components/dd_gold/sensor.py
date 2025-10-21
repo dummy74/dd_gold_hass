@@ -1,9 +1,11 @@
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
 from .const import DOMAIN, WEIGHT_CODES, WEIGHT_DISPLAY
 from .coordinator import DresdenGoldCoordinator
+import json
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -18,12 +20,12 @@ async def async_setup_entry(
         entities.append(DresdenGoldAverageSensor(coordinator, weight))
     async_add_entities(entities)
 
-class DresdenGoldBaseSensor(SensorEntity):
+class DresdenGoldBaseSensor(CoordinatorEntity, SensorEntity):
     """Base sensor for Dresden Gold."""
 
     def __init__(self, coordinator: DresdenGoldCoordinator, weight: str) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator=coordinator)
+        super().__init__(coordinator)
         self._weight = weight
         self._attr_icon = "mdi:gold"
         self._attr_unique_id = f"dresden_gold_{weight}_{self.sensor_type}"

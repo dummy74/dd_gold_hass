@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import re
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
+from homeassistant.util.dt import utcnow
 import json
 from urllib.parse import urlparse, urlunparse
 from collections import defaultdict
@@ -33,6 +34,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         self.base_url = "https://www.dresden.gold"
         self.target_url = "https://www.dresden.gold/silber/silbermuenzen.html?___store=deutsch&limit=all"
         self.session = aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+        self.last_update_success_time: Optional[datetime] = None
 
     async def _async_update_data(self) -> dict:
         """Fetch data from API."""
@@ -58,6 +60,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
             _LOGGER.error(f"Error fetching data: {repr(err)}")
             raise UpdateFailed(f"Error fetching data: {err}")
         else:
+            self.last_update_success_time = utcnow()
             return data
 
     def update_config(self, min_price=None, max_price=None, max_coins=None, require_zero_tax=None):

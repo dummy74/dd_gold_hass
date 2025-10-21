@@ -1,4 +1,5 @@
 from homeassistant.components.number import NumberEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
@@ -17,12 +18,12 @@ async def async_setup_entry(
     ]
     async_add_entities(entities)
 
-class DresdenGoldNumber(NumberEntity):
+class DresdenGoldNumber(CoordinatorEntity, NumberEntity):
     """Base number entity for Dresden Gold config."""
 
     def __init__(self, coordinator: DresdenGoldCoordinator, name: str, unique_id: str, icon: str, min_value: float, max_value: float, step: float, value: float) -> None:
         """Initialize the number."""
-        self.coordinator = coordinator
+        super().__init__(coordinator)
         self._attr_name = name
         self._attr_unique_id = unique_id
         self._attr_icon = icon

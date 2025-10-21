@@ -94,7 +94,7 @@ class DresdenGoldMaxCoinsNumber(DresdenGoldNumber):
             "dresden_gold_max_coins",
             "mdi:counter",
             5,
-            50,
+            500,
             1,
             coordinator.max_coins
         )

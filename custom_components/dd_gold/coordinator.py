@@ -1,5 +1,6 @@
 import logging
-import requests
+import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 import re
 from typing import List, Dict, Optional, Tuple
@@ -31,13 +32,12 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         self.require_zero_tax = entry.data.get(CONF_REQUIRE_ZERO_TAX, DEFAULT_REQUIRE_ZERO_TAX)
         self.base_url = "https://www.dresden.gold"
         self.target_url = "https://www.dresden.gold/silber/silbermuenzen.html?___store=deutsch&limit=all"
-        self.session = requests.Session()
-        self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+        self.session = aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
 
     async def _async_update_data(self) -> dict:
         """Fetch data from API."""
         try:
-            coins = await self.hass.async_add_executor_job(self.scrape_silver_coins)
+            coins = await self.scrape_silver_coins()
             coins_by_weight = defaultdict(list)
             for c in coins:
                 coins_by_weight[c['weight_code']].append(c)
@@ -71,8 +71,8 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
             self.require_zero_tax = require_zero_tax
         self.async_set_updated_data(self.data)  # Trigger refresh
 
-    def scrape_silver_coins(self) -> List[Dict[str, str]]:
-        soup = self.fetch_page()
+    async def scrape_silver_coins(self) -> List[Dict[str, str]]:
+        soup = await self.fetch_page()
         if not soup:
             return []
 
@@ -80,7 +80,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         product_links = soup.find_all('a', href=re.compile(r'/silber/.*\.html'))
         _LOGGER.debug(f"Found {len(product_links)} product links")
 
-        detail_count = 0
+        potential_coins = []
 
         for link in product_links:
             try:
@@ -110,87 +110,73 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
 
                 is_available, qty, available_label = self.parse_availability_text(item)
 
-                detailed_weight = detected_weight
-                detailed_price = price
-                detailed_zero_tax = is_zero_tax
-                if detail_count < self.max_coins:
-                    is_available, qty, available_label, detailed_zero_tax, detailed_price, detailed_weight_temp = self.fetch_product_details(url)
-                    if detailed_weight_temp:
-                        detailed_weight = detailed_weight_temp
-                    detail_count += 1
-
-                if not detailed_weight:
-                    continue
-
-                if self.require_zero_tax and not detailed_zero_tax:
-                    continue
-
-                if detailed_price <= 0 or not (self.min_price <= detailed_price <= self.max_price):
-                    continue
-
                 if not is_available or (qty is not None and qty <= 0):
                     continue
 
                 coin = {
                     "name": name,
-                    "price": f"{round(detailed_price, 2):.2f}",
-                    "weight": WEIGHT_DISPLAY.get(detailed_weight, "Unknown"),
-                    "weight_code": detailed_weight,
-                    "tax_rate": "0,00%" if detailed_zero_tax else "19,00%",
+                    "price": f"{round(price, 2):.2f}",
+                    "weight": WEIGHT_DISPLAY.get(detected_weight, "Unknown"),
+                    "weight_code": detected_weight,
+                    "tax_rate": "0,00%" if is_zero_tax else "19,00%",
                     "availability": available_label,
                     "qty": "0" if qty is None else str(qty),
                     "url": url,
-                    "last_updated": datetime.now().isoformat()
                 }
-                coins.append(coin)
+                potential_coins.append(coin)
             except Exception as e:
-                _LOGGER.debug(f"Error processing product link: {e}")
+                _LOGGER.debug(f"Error processing link: {e}")
+
+        # Sort potential coins by initial price to prioritize cheapest for detail fetching
+        potential_coins.sort(key=lambda x: float(x['price']))
+
+        # Fetch details for up to max_coins cheapest potential coins in parallel
+        urls_to_fetch = [coin['url'] for coin in potential_coins[:self.max_coins]]
+        if urls_to_fetch:
+            tasks = [self.fetch_product_details(url) for url in urls_to_fetch]
+            details_list = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, details in enumerate(details_list):
+                if isinstance(details, Exception):
+                    _LOGGER.warning(f"Detail fetch error for {urls_to_fetch[i]}: {details}")
+                    continue
+                is_available, qty, available_label, detailed_zero_tax, detailed_price, detailed_weight = details
+                coin = potential_coins[i]
+                if detailed_weight:
+                    coin['weight_code'] = detailed_weight
+                    coin['weight'] = WEIGHT_DISPLAY.get(detailed_weight, "Unknown")
+                coin['tax_rate'] = "0,00%" if detailed_zero_tax else "19,00%"
+                if detailed_price > 0:
+                    coin['price'] = f"{round(detailed_price, 2):.2f}"
+                coin['availability'] = available_label
+                coin['qty'] = str(qty) if qty is not None else "0"
+
+        # Now filter all potential coins based on (detailed where available) values
+        filtered_coins = []
+        for coin in potential_coins:
+            price_f = float(coin['price'])
+            zero_tax = coin['tax_rate'] == "0,00%"
+            if self.require_zero_tax and not zero_tax:
                 continue
+            if not (self.min_price <= price_f <= self.max_price):
+                continue
+            qty_int = int(coin['qty']) if coin['qty'].isdigit() else None
+            is_avail = coin['availability'] != "Nicht verfügbar"
+            if not is_avail or (qty_int is not None and qty_int <= 0):
+                continue
+            filtered_coins.append(coin)
 
-        best_by_key = {}
-        for c in coins:
-            norm_url = self.normalize_url(c['url'])
-            c['url'] = norm_url
-            coin_key = self.create_coin_key(c['name'], c['weight_code'], norm_url)
-            
-            if coin_key in best_by_key:
-                best_by_key[coin_key] = self.choose_better_coin(best_by_key[coin_key], c)
-            else:
-                best_by_key[coin_key] = c
+        return filtered_coins
 
-        coins = list(best_by_key.values())
-        coins = [c for c in coins if c.get('qty','0') != '0']
-        coins = sorted(coins, key=lambda x: float(x['price']))
-        _LOGGER.debug(f"Final coins: {len(coins)} (details fetched: {detail_count})")
-        return coins
-
-    def normalize_url(self, url: str) -> str:
-        if not url:
-            return ""
-        if not url.startswith("http"):
-            url = self.base_url + url
-        u = urlparse(url)
-        path = u.path.rstrip("/").lower()
-        return urlunparse((u.scheme, u.netloc, path, "", "", ""))
-
-    def choose_better_coin(self, a: dict, b: dict) -> dict:
-        def score(c: dict) -> tuple:
-            s = 0
-            if c.get("qty"): s += 3
-            avail = (c.get("availability") or "").lower()
-            if avail and "unbekannt" not in avail: s += 2
-            name = c.get("name") or ""
-            if len(name) > 30: s += 1
-            return (s, len(name))
-        return b if score(b) > score(a) else a
-
-    def fetch_page(self) -> Optional[BeautifulSoup]:
+    async def fetch_page(self) -> Optional[BeautifulSoup]:
         try:
-            r = self.session.get(self.target_url, timeout=15)
-            r.raise_for_status()
-            return BeautifulSoup(r.content, 'html.parser')
+            async with self.session.get(self.target_url, timeout=12) as response:
+                if response.status != 200:
+                    _LOGGER.warning(f"Failed to fetch page: status {response.status}")
+                    return None
+                text = await response.text()
+                return BeautifulSoup(text, 'html.parser')
         except Exception as e:
-            _LOGGER.error(f"Error fetching list page: {e}")
+            _LOGGER.warning(f"Fetch page error: {e}")
             return None
 
     def extract_price(self, soup: BeautifulSoup, from_detail: bool = False) -> float:
@@ -314,11 +300,13 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
 
         return (True, None, "Verfügbarkeit unbekannt")
 
-    def fetch_product_details(self, url: str) -> Tuple[bool, Optional[int], str, bool, float, Optional[str]]:
+    async def fetch_product_details(self, url: str) -> Tuple[bool, Optional[int], str, bool, float, Optional[str]]:
         try:
-            r = self.session.get(url, timeout=12)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.content, 'html.parser')
+            async with self.session.get(url, timeout=12) as r:
+                if r.status != 200:
+                    raise ValueError(f"Status {r.status}")
+                text = await r.text()
+                soup = BeautifulSoup(text, 'html.parser')
 
             is_available, qty, available_label = self.parse_availability_text(soup)
 
@@ -333,3 +321,8 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.warning(f"Detail fetch error {url}: {e}")
             return (False, None, "Verfügbarkeit unbekannt", False, 0.0, None)
+
+    def normalize_url(self, url: str) -> str:
+        parsed = urlparse(url)
+        path = parsed.path.rstrip('/')
+        return urlunparse((parsed.scheme, parsed.netloc, path, '', '', ''))

@@ -3,6 +3,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.device_registry import DeviceInfo
 from .const import DOMAIN
 from .coordinator import DresdenGoldCoordinator
 
@@ -26,6 +27,15 @@ class DresdenGoldZeroTaxSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_unique_id = "dresden_gold_require_zero_tax"
         self._attr_icon = "mdi:percent"
         self._attr_is_on = coordinator.require_zero_tax
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "dresden_gold_config")},
+            name="Dresden Gold Configuration",
+            manufacturer="Dresden Gold",
+            model="Config",
+            sw_version="1.0",
+            entry_type=None,
+            configuration_url="https://www.dresden.gold",
+        )
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the entity on."""

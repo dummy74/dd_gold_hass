@@ -3,6 +3,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.device_registry import DeviceInfo
 from .const import DOMAIN, WEIGHT_CODES, WEIGHT_DISPLAY
 from .coordinator import DresdenGoldCoordinator
 import json
@@ -30,6 +31,15 @@ class DresdenGoldBaseSensor(CoordinatorEntity, SensorEntity):
         self._attr_icon = "mdi:gold"
         self._attr_unique_id = f"dresden_gold_{weight}_{self.sensor_type}"
         self._attr_name = f"Dresden Gold {WEIGHT_DISPLAY.get(weight, weight)} {self.sensor_type.capitalize()}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"dresden_gold_{weight}")},
+            name=f"Dresden Gold {WEIGHT_DISPLAY.get(weight, weight)}",
+            manufacturer="Dresden Gold",
+            model="Silver Coin Tracker",
+            sw_version="1.0",
+            entry_type=None,
+            configuration_url="https://www.dresden.gold",
+        )
 
     @property
     def data(self):

@@ -3,6 +3,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.device_registry import DeviceInfo
 from .const import DOMAIN
 from .coordinator import DresdenGoldCoordinator
 
@@ -31,6 +32,15 @@ class DresdenGoldNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_max_value = max_value
         self._attr_native_step = step
         self._attr_native_value = value
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, "dresden_gold_config")},
+            name="Dresden Gold Configuration",
+            manufacturer="Dresden Gold",
+            model="Config",
+            sw_version="1.0",
+            entry_type=None,
+            configuration_url="https://www.dresden.gold",
+        )
 
 class DresdenGoldMinPriceNumber(DresdenGoldNumber):
     """Number for min price."""

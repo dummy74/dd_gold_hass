@@ -28,7 +28,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         self.entry = entry
         self.min_price = entry.data.get(CONF_MIN_PRICE, DEFAULT_MIN_PRICE)
         self.max_price = entry.data.get(CONF_MAX_PRICE, DEFAULT_MAX_PRICE)
-        self.max_coins = entry.data.get(CONF_MAX_COINS, DEFAULT_MAX_COINS)
+        self.max_coins = int(entry.data.get(CONF_MAX_COINS, DEFAULT_MAX_COINS))
         self.require_zero_tax = entry.data.get(CONF_REQUIRE_ZERO_TAX, DEFAULT_REQUIRE_ZERO_TAX)
         self.base_url = "https://www.dresden.gold"
         self.target_url = "https://www.dresden.gold/silber/silbermuenzen.html?___store=deutsch&limit=all"
@@ -55,6 +55,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
                         "total_coins": len(group_coins),
                     }
         except Exception as err:
+            _LOGGER.error(f"Error fetching data: {repr(err)}")
             raise UpdateFailed(f"Error fetching data: {err}")
         else:
             return data
@@ -66,7 +67,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         if max_price is not None:
             self.max_price = max_price
         if max_coins is not None:
-            self.max_coins = max_coins
+            self.max_coins = int(max_coins)
         if require_zero_tax is not None:
             self.require_zero_tax = require_zero_tax
         self.async_set_updated_data(self.data)  # Trigger refresh
@@ -81,6 +82,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         _LOGGER.debug(f"Found {len(product_links)} product links")
 
         potential_coins = []
+        urls_to_fetch = []
 
         for link in product_links:
             try:
@@ -124,20 +126,26 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
                     "url": url,
                 }
                 potential_coins.append(coin)
+                urls_to_fetch.append(url)
             except Exception as e:
                 _LOGGER.debug(f"Error processing link: {e}")
 
-        # Sort potential coins by initial price to prioritize cheapest for detail fetching
-        potential_coins.sort(key=lambda x: float(x['price']))
+        _LOGGER.debug(f"Found {len(potential_coins)} potential coins")
 
-        # Fetch details for up to max_coins cheapest potential coins in parallel
-        urls_to_fetch = [coin['url'] for coin in potential_coins[:self.max_coins]]
+        # Fetch details for all potential coins in parallel with concurrency limit
         if urls_to_fetch:
-            tasks = [self.fetch_product_details(url) for url in urls_to_fetch]
+            sem = asyncio.Semaphore(20)  # Limit to 20 concurrent requests
+            async def fetch_limited(url):
+                async with sem:
+                    return await self.fetch_product_details(url)
+
+            tasks = [fetch_limited(url) for url in urls_to_fetch]
             details_list = await asyncio.gather(*tasks, return_exceptions=True)
             for i, details in enumerate(details_list):
                 if isinstance(details, Exception):
                     _LOGGER.warning(f"Detail fetch error for {urls_to_fetch[i]}: {details}")
+                    # Set to unavailable
+                    potential_coins[i]['availability'] = "Nicht verfügbar"
                     continue
                 is_available, qty, available_label, detailed_zero_tax, detailed_price, detailed_weight = details
                 coin = potential_coins[i]
@@ -150,7 +158,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
                 coin['availability'] = available_label
                 coin['qty'] = str(qty) if qty is not None else "0"
 
-        # Now filter all potential coins based on (detailed where available) values
+        # Filter based on detailed values
         filtered_coins = []
         for coin in potential_coins:
             price_f = float(coin['price'])
@@ -164,6 +172,8 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
             if not is_avail or (qty_int is not None and qty_int <= 0):
                 continue
             filtered_coins.append(coin)
+
+        _LOGGER.debug(f"Filtered to {len(filtered_coins)} coins")
 
         return filtered_coins
 

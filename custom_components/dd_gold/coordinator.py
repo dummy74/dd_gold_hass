@@ -54,9 +54,10 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
                         "average_price": sum(prices) / len(prices),
                         "total_coins": len(group_coins),
                     }
-            return data
         except Exception as err:
             raise UpdateFailed(f"Error fetching data: {err}")
+        else:
+            return data
 
     def update_config(self, min_price=None, max_price=None, max_coins=None, require_zero_tax=None):
         """Update configuration values."""

@@ -12,10 +12,11 @@ DEFAULT_MAX_COINS = 100
 DEFAULT_REQUIRE_ZERO_TAX = False
 DEFAULT_UPDATE_INTERVAL = 300  # seconds
 
-WEIGHT_CODES = ["0.5_oz", "1_oz", "2_oz", "5_oz", "10_oz"]
+WEIGHT_CODES = ["0.5_oz", "1_oz", "1.5_oz", "2_oz", "5_oz", "10_oz"]
 WEIGHT_DISPLAY = {
     "0.5_oz": "0.5 oz",
     "1_oz": "1 oz",
+    "1.5_oz": "1.5 oz",
     "2_oz": "2 oz",
     "5_oz": "5 oz",
     "10_oz": "10 oz"

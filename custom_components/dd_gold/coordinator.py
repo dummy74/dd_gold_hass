@@ -6,8 +6,6 @@ import re
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from homeassistant.util.dt import utcnow
-import json
-from urllib.parse import urlparse, urlunparse
 from collections import defaultdict
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.core import HomeAssistant
@@ -32,30 +30,43 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         self.max_coins = int(entry.data.get(CONF_MAX_COINS, DEFAULT_MAX_COINS))
         self.require_zero_tax = entry.data.get(CONF_REQUIRE_ZERO_TAX, DEFAULT_REQUIRE_ZERO_TAX)
         self.base_url = "https://www.dresden.gold"
-        self.target_url = "https://www.dresden.gold/silber/silbermuenzen.html?___store=deutsch&limit=all"
         self.session = aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
         self.last_update_success_time: Optional[datetime] = None
 
     async def _async_update_data(self) -> dict:
         """Fetch data from API."""
         try:
-            coins = await self.scrape_silver_coins()
-            coins_by_weight = defaultdict(list)
-            for c in coins:
-                coins_by_weight[c['weight_code']].append(c)
+            weight_slugs = {
+                "0.5_oz": "1-2-unze",
+                "1_oz": "1-unze",
+                #"1.5_oz": "1-5-unzen",
+                "2_oz": "2-unzen",
+                "5_oz": "5-unzen",
+                "10_oz": "10-unzen",
+            }
 
-            data = {}
-            for weight in WEIGHT_CODES:
-                group_coins = sorted(coins_by_weight[weight], key=lambda x: float(x['price']))[:self.max_coins]
+            async def fetch_weight(weight):
+                if weight not in weight_slugs:
+                    return weight, {}
+                slug = weight_slugs[weight]
+                category_url = f"{self.base_url}/silber/silbermuenzen/{slug}.html?limit=all"
+                _LOGGER.debug(f"Fetch {weight=}: {category_url}")
+                coins = await self.scrape_coins_for_weight(weight, category_url)
+                group_coins = sorted(coins, key=lambda x: float(x['price']))[:self.max_coins]
                 if group_coins:
                     prices = [float(c['price']) for c in group_coins]
-                    data[weight] = {
+                    return weight, {
                         "coins": group_coins,
                         "min_price": min(prices),
                         "max_price": max(prices),
                         "average_price": sum(prices) / len(prices),
                         "total_coins": len(group_coins),
                     }
+                return weight, {}
+
+            tasks = [fetch_weight(weight) for weight in WEIGHT_CODES]
+            results = await asyncio.gather(*tasks)
+            data = {weight: info for weight, info in results if info}
         except Exception as err:
             _LOGGER.error(f"Error fetching data: {repr(err)}")
             raise UpdateFailed(f"Error fetching data: {err}")
@@ -75,167 +86,139 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
             self.require_zero_tax = require_zero_tax
         self.async_set_updated_data(self.data)  # Trigger refresh
 
-    async def scrape_silver_coins(self) -> List[Dict[str, str]]:
-        soup = await self.fetch_page()
+    async def scrape_coins_for_weight(self, weight_code: str, url: str) -> List[Dict[str, str]]:
+        soup = await self.fetch_page(url)
         if not soup:
             return []
 
         coins: List[Dict[str, str]] = []
-        product_links = soup.find_all('a', href=re.compile(r'/silber/.*\.html'))
-        _LOGGER.debug(f"Found {len(product_links)} product links")
+        product_items = soup.find_all('li', class_='item')  # Assuming common Magento/Shop structure; adjust if needed
 
-        potential_coins = []
-        urls_to_fetch = []
+        _LOGGER.info(f"Product items ({weight_code=}): {len(product_items)}")
 
-        for link in product_links:
+        for item in product_items:
+            #_LOGGER.debug(f"{item=}")
             try:
-                item = link
-                while item and item.name not in ['li', 'div']:
-                    item = item.parent
-                if not item:
+                name_el = item.select_one('h2.product-name a') or item.select_one('a.product-image[title]')
+                _LOGGER.debug(f"{name_el=}")
+                if not name_el:
+                    continue
+                name = name_el.text.strip() if name_el.text else name_el.get('title', '').strip()
+                _LOGGER.debug(f"{name=}")
+                if not name:
                     continue
 
-                name = self.clean_name(link.get('title') or link.get_text(strip=True))
-                if not self.is_valid_coin_name(name):
+                item_url = name_el['href']
+                _LOGGER.debug(f"{item_url=}")
+                if not item_url.startswith('http'):
+                    item_url = self.base_url + item_url
+
+                mwst_price_el = item.select_one('span.price')
+                _LOGGER.debug(f"{mwst_price_el=}")
+                if not mwst_price_el:
                     continue
 
-                url = self.base_url + link['href'] if not link['href'].startswith('http') else link['href']
-
-                detected_weight = self.detect_coin_weight(item)
-                if not detected_weight:
+                mwst_price_str = mwst_price_el.text.strip().replace('€', '').replace(',', '.').replace(' ', '')
+                mwst_price = float(re.sub(r'[^\d.]', '', mwst_price_str))
+                _LOGGER.debug(f"{mwst_price=}")
+                if mwst_price < 0:
                     continue
 
-                is_zero_tax = self.is_zero_tax(item)
-                if self.require_zero_tax and not is_zero_tax:
+                price_el = item.select_one('span.regular-price').select_one('span[itemprop="price"]')
+                _LOGGER.debug(f"{price_el=}")
+                if not price_el:
                     continue
 
-                price = self.extract_price(item)
+                price_str = price_el.text.strip().replace('€', '').replace(',', '.').replace(' ', '')
+                price = float(re.sub(r'[^\d.]', '', price_str))
+                _LOGGER.debug(f"{price=}")
                 if price <= 0:
                     continue
 
-                is_available, qty, available_label = self.parse_availability_text(item)
+                is_zero_tax = mwst_price==0.0 or self.is_zero_tax(item)
+                _LOGGER.debug(f"{is_zero_tax=}")
+                if self.require_zero_tax and not is_zero_tax:
+                    continue
 
+                if not (self.min_price <= price <= self.max_price):
+                    continue
+
+
+                avail_el = item.select_one('span.regular-price').select_one('link[itemprop="availability"]')
+                _LOGGER.debug(f"{avail_el=}")
+                if not avail_el:
+                    continue
+
+                is_available, qty, available_label = self.parse_availability_text(item)
+                _LOGGER.debug(f"{is_available}, {qty=}, {available_label=}")
                 if not is_available or (qty is not None and qty <= 0):
+                    continue
+
+                name = self.clean_name(name)
+                if not self.is_valid_coin_name(name):
                     continue
 
                 coin = {
                     "name": name,
                     "price": f"{round(price, 2):.2f}",
-                    "weight": WEIGHT_DISPLAY.get(detected_weight, "Unknown"),
-                    "weight_code": detected_weight,
-                    "tax_rate": "0,00%" if is_zero_tax else "19,00%",
+                    "mwst_price": f"{round(mwst_price, 2):.2f}",
+                    "weight": WEIGHT_DISPLAY.get(weight_code, "Unknown"),
+                    "weight_code": weight_code,
+                    "tax_rate": f"{round(mwst_price/price if price else 0.0,2)}",
                     "availability": available_label,
-                    "qty": "0" if qty is None else str(qty),
-                    "url": url,
+                    "qty": str(qty) if qty is not None else "",
+                    "url": item_url,
                 }
-                potential_coins.append(coin)
-                urls_to_fetch.append(url)
+                coins.append(coin)
+            except ValueError as ve:
+                _LOGGER.debug(f"Value error parsing item: {ve}")
             except Exception as e:
-                _LOGGER.debug(f"Error processing link: {e}")
+                _LOGGER.warning(f"Error parsing product item: {e}")
 
-        _LOGGER.debug(f"Found {len(potential_coins)} potential coins")
+        _LOGGER.debug(f"Scraped {len(coins)} coins for weight {weight_code}")
+        return coins
 
-        # Fetch details for all potential coins in parallel with concurrency limit
-        if urls_to_fetch:
-            sem = asyncio.Semaphore(20)  # Limit to 20 concurrent requests
-            async def fetch_limited(url):
-                async with sem:
-                    return await self.fetch_product_details(url)
-
-            tasks = [fetch_limited(url) for url in urls_to_fetch]
-            details_list = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, details in enumerate(details_list):
-                if isinstance(details, Exception):
-                    _LOGGER.warning(f"Detail fetch error for {urls_to_fetch[i]}: {details}")
-                    # Set to unavailable
-                    potential_coins[i]['availability'] = "Nicht verfügbar"
-                    continue
-                is_available, qty, available_label, detailed_zero_tax, detailed_price, detailed_weight = details
-                coin = potential_coins[i]
-                if detailed_weight:
-                    coin['weight_code'] = detailed_weight
-                    coin['weight'] = WEIGHT_DISPLAY.get(detailed_weight, "Unknown")
-                coin['tax_rate'] = "0,00%" if detailed_zero_tax else "19,00%"
-                if detailed_price > 0:
-                    coin['price'] = f"{round(detailed_price, 2):.2f}"
-                coin['availability'] = available_label
-                coin['qty'] = str(qty) if qty is not None else "0"
-
-        # Filter based on detailed values
-        filtered_coins = []
-        for coin in potential_coins:
-            price_f = float(coin['price'])
-            zero_tax = coin['tax_rate'] == "0,00%"
-            if self.require_zero_tax and not zero_tax:
-                continue
-            if not (self.min_price <= price_f <= self.max_price):
-                continue
-            qty_int = int(coin['qty']) if coin['qty'].isdigit() else None
-            is_avail = coin['availability'] != "Nicht verfügbar"
-            if not is_avail or (qty_int is not None and qty_int <= 0):
-                continue
-            filtered_coins.append(coin)
-
-        _LOGGER.debug(f"Filtered to {len(filtered_coins)} coins")
-
-        return filtered_coins
-
-    async def fetch_page(self) -> Optional[BeautifulSoup]:
+    # async def fetch_page(self) -> Optional[BeautifulSoup]:
+    #     try:
+    #         async with self.session.get(self.target_url, timeout=12) as response:
+    #             if response.status != 200:
+    #                 _LOGGER.warning(f"Failed to fetch page: status {response.status}")
+    #                 return None
+    #             text = await response.text()
+    #             return BeautifulSoup(text, 'html.parser')
+    #     except Exception as e:
+    #         _LOGGER.warning(f"Fetch page error: {e}")
+    #         return None
+    
+    async def fetch_page(self, url: str) -> Optional[BeautifulSoup]:
         try:
-            async with self.session.get(self.target_url, timeout=12) as response:
+            async with self.session.get(url, timeout=12) as response:
                 if response.status != 200:
-                    _LOGGER.warning(f"Failed to fetch page: status {response.status}")
+                    _LOGGER.warning(f"Failed to fetch {url}: status {response.status}")
                     return None
                 text = await response.text()
                 return BeautifulSoup(text, 'html.parser')
         except Exception as e:
-            _LOGGER.warning(f"Fetch page error: {e}")
+            _LOGGER.warning(f"Fetch error for {url}: {e}")
             return None
 
     def extract_price(self, soup: BeautifulSoup, from_detail: bool = False) -> float:
         try:
             if from_detail:
-                price_el = soup.select_one('.price, [itemprop="price"], .product-price')
-                text = price_el.get_text(strip=True) if price_el else str(soup)
+                price_el = soup.select_one('.price-including-tax .price, [itemprop="price"]')
             else:
-                text = soup.get_text(strip=True)
-
-            patterns = [
-                r'(\d+[.,]\d{2})\s*€', 
-                r'€\s*(\d+[.,]\d{2})', 
-                r'(\d+[.,]\d{2})', 
-                r'(\d+)\s*€'
-            ]
-            for p in patterns:
-                m = re.search(p, text)
-                if m:
-                    price = float(m.group(1).replace(',', '.'))
-                    if self.min_price <= price <= self.max_price:
-                        return price
-        except Exception as e:
-            _LOGGER.debug(f"Price extraction error: {e}")
+                price_el = soup.select_one('.price')
+            if price_el:
+                price_str = price_el.text.strip().replace('€', '').replace(',', '.').replace(' ', '')
+                return float(re.sub(r'[^\d.]', '', price_str))
+        except:
+            pass
         return 0.0
 
-    def detect_coin_weight(self, soup: BeautifulSoup, from_detail: bool = False) -> Optional[str]:
+    def is_zero_tax(self, soup: BeautifulSoup) -> bool:
         text = soup.get_text(strip=True).lower()
         
-        patterns = [
-            (r'\b10\s*oz\b|\b10\s*unze\b|\b10\s*troy\s*oz\b|\b311\s*(?:[.,]1)?\s*g\b|\b311\s*gramm\b', "10_oz"),
-            (r'\b5\s*oz\b|\b5\s*unze\b|\b5\s*troy\s*oz\b|\b155[.,]5\s*g\b|\b155\s*gramm\b', "5_oz"),
-            (r'\b2\s*oz\b|\b2\s*unze\b|\b2\s*troy\s*oz\b|\b62[.,]2\s*g\b|\b62\s*gramm\b', "2_oz"),
-            (r'\b(?:0[.,]5|1/2)\s*oz\b|\b(?:0[.,]5|1/2)\s*unze\b|\b(?:0[.,]5|1/2)\s*troy\s*oz\b|\b15[.,]55?\s*g\b|\b15\s*gramm\b', "0.5_oz"),
-            (r'\b1(?:\s*[.,]\s*0)?\s*oz\b|\b1(?:\s*[.,]\s*0)?\s*unze\b|\b1\s*troy\s*oz\b|\b31[.,]1(?:03)?\s*g\b|\b31\s*gramm\b', "1_oz")
-        ]
-        
-        for pattern, weight in patterns:
-            if re.search(pattern, text):
-                return weight
-        
-        return None
-
-    def is_zero_tax(self, soup: BeautifulSoup, from_detail: bool = False) -> bool:
-        text = soup.get_text(strip=True).lower()
-        
+        _LOGGER.debug(f"is_zero_tax? {text=}")
         patterns = [
             r'0[.,]00\s*€?\s*mwst',
             r'mwst[.:]\s*0[.,]00\s*€?',
@@ -248,6 +231,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         
         for pattern in patterns:
             if re.search(pattern, text):
+                _LOGGER.debug(f"is_zero_tax! {pattern=}")
                 return True
         
         keywords = [
@@ -259,8 +243,10 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         
         for keyword in keywords:
             if keyword in text:
+                _LOGGER.debug(f"is_zero_tax! {keyword=}")
                 return True
         
+        _LOGGER.debug("is_zero_tax? -> NO")
         return False
 
     def is_valid_coin_name(self, name: str) -> bool:
@@ -277,22 +263,14 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
         name = ' '.join(name.split()).strip()
         return name[:60] + "..." if len(name) > 60 else name
 
-    def create_coin_key(self, name: str, weight: str, url: str) -> str:
-        clean_name = re.sub(r'[^\w\s]', '', name.lower()).strip()
-        clean_name = re.sub(r'\s+', ' ', clean_name)
-        
-        clean_url = self.normalize_url(url)
-        
-        return f"{clean_name}|{weight}|{clean_url}"
-
     def parse_availability_text(self, soup: BeautifulSoup) -> Tuple[bool, Optional[int], str]:
         text = soup.get_text(strip=True).lower()
 
         if any(x in text for x in ['nicht verfügbar', 'ausverkauft', 'out of stock', 'derzeit nicht', 'vorübergehend nicht']):
             return (False, 0, "Nicht verfügbar")
 
-        if any(x in text for x in ['auf lager', 'lagernd', 'verfügbar', 'in stock']):
-            m_qty = re.search(r'(\d+)\s*(?:stk|stück|verfügbar|lagernd)', text)
+        if any(x in text for x in ['auf lager', 'lagernd', 'verfügbar', 'in stock', 'sofort lieferbar']):
+            m_qty = re.search(r'(-?\d+)\s*(?:stk|stück|verfügbar|lagernd)', text)
             if m_qty:
                 qty = int(m_qty.group(1))
                 return (qty > 0, qty, "Auf Lager" if qty > 0 else "Nicht verfügbar")
@@ -311,31 +289,5 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
             qty = int(m_qty2.group(1))
             return (qty > 0, qty, "Auf Lager" if qty > 0 else "Nicht verfügbar")
 
+        # Default assume available if no info
         return (True, None, "Verfügbarkeit unbekannt")
-
-    async def fetch_product_details(self, url: str) -> Tuple[bool, Optional[int], str, bool, float, Optional[str]]:
-        try:
-            async with self.session.get(url, timeout=12) as r:
-                if r.status != 200:
-                    raise ValueError(f"Status {r.status}")
-                text = await r.text()
-                soup = BeautifulSoup(text, 'html.parser')
-
-            is_available, qty, available_label = self.parse_availability_text(soup)
-
-            is_zero_tax = self.is_zero_tax(soup, from_detail=True)
-
-            price = self.extract_price(soup, from_detail=True)
-
-            weight = self.detect_coin_weight(soup, from_detail=True)
-
-            return (is_available, qty, available_label, is_zero_tax, price, weight)
-
-        except Exception as e:
-            _LOGGER.warning(f"Detail fetch error {url}: {e}")
-            return (False, None, "Verfügbarkeit unbekannt", False, 0.0, None)
-
-    def normalize_url(self, url: str) -> str:
-        parsed = urlparse(url)
-        path = parsed.path.rstrip('/')
-        return urlunparse((parsed.scheme, parsed.netloc, path, '', '', ''))

@@ -164,7 +164,7 @@ class DresdenGoldCoordinator(DataUpdateCoordinator):
                     "mwst_price": f"{round(mwst_price, 2):.2f}",
                     "weight": WEIGHT_DISPLAY.get(weight_code, "Unknown"),
                     "weight_code": weight_code,
-                    "tax_rate": f"{round(mwst_price/price if price else 0.0,2)}",
+                    "tax_rate": f"{round(mwst_price/(price-mwst_price) if price else 0.0,2)}",
                     "availability": available_label,
                     "qty": str(qty) if qty is not None else "",
                     "url": item_url,

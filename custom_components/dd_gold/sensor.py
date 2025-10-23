@@ -62,12 +62,14 @@ class DresdenGoldCoinsSensor(DresdenGoldBaseSensor):
     def extra_state_attributes(self) -> dict:
         coins = self.data.get("coins", [])
         attrs = {
-            "coins_json": json.dumps(coins),
+            #"coins_json": json.dumps(coins),
             "last_update": self.coordinator.last_update_success_time.isoformat() if self.coordinator.last_update_success_time else None,
         }
         for i, coin in enumerate(coins, 1):
             attrs[f"coin_{i}_name"] = coin["name"]
             attrs[f"coin_{i}_price"] = coin["price"]
+            attrs[f"coin_{i}_mwst_price"] = coin["mwst_price"]
+            attrs[f"coin_{i}_tax_rate"] = coin["tax_rate"]
             attrs[f"coin_{i}_weight"] = coin["weight"]
             attrs[f"coin_{i}_qty"] = coin.get("qty", "0")
             attrs[f"coin_{i}_url"] = coin["url"]
@@ -101,6 +103,8 @@ class DresdenGoldMinSensor(DresdenGoldBaseSensor):
                 "availability": cheapest["availability"],
                 "weight": cheapest["weight"],
                 "qty": cheapest.get("qty", ""),
+                "mwst_price": cheapest.get("mwst_price", ""),
+                "tax_rate": cheapest.get("tax_rate"),
                 "last_update": self.coordinator.last_update_success_time.isoformat() if self.coordinator.last_update_success_time else None,
             }
         return {}
@@ -133,6 +137,8 @@ class DresdenGoldMaxSensor(DresdenGoldBaseSensor):
                 "availability": most_expensive["availability"],
                 "weight": most_expensive["weight"],
                 "qty": most_expensive.get("qty", ""),
+                "mwst_price": most_expensive.get("mwst_price", ""),
+                "tax_rate": most_expensive.get("tax_rate"),
                 "last_update": self.coordinator.last_update_success_time.isoformat() if self.coordinator.last_update_success_time else None,
             }
         return {}
